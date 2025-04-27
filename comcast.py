@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 import aiohttp
 from playwright.async_api import async_playwright, Page, Browser, Response
 from dotenv import load_dotenv
-from utils import with_retry
+from utils import with_retry, get_proxy_config, get_aiohttp_proxy_url
 
 # Load environment variables
 load_dotenv()
@@ -27,6 +27,7 @@ class ComcastScraper:
         self.navigation_response_future: Optional[asyncio.Future] = None
         self.page: Optional[Page] = None
         self.browser: Optional[Browser] = None
+        self.proxy_config = get_proxy_config()
 
     @staticmethod
     def get_credentials() -> tuple[str, str]:
@@ -45,9 +46,18 @@ class ComcastScraper:
     async def setup(self):
         """Initialize browser and page with proper configuration."""
         playwright = await async_playwright().start()
+
+        # Configure browser with proxy if available
+        browser_args = []
+        if self.proxy_config:
+            browser_args.append(f'--proxy-server={self.proxy_config["server"]}')
+            if 'username' in self.proxy_config and 'password' in self.proxy_config:
+                browser_args.append(f'--proxy-auth={self.proxy_config["username"]}:{self.proxy_config["password"]}')
+
         self.browser = await playwright.chromium.launch(
             headless=False,
-            slow_mo=500
+            slow_mo=500,
+            args=browser_args
         )
         self.page = await self.browser.new_page()
 
@@ -141,6 +151,8 @@ class ComcastScraper:
                 logger.error("No navigation headers available while processing account")
                 return
 
+            # Configure aiohttp session with proxy
+            proxy_url = get_aiohttp_proxy_url()
             async with aiohttp.ClientSession() as session:
                 # Get user token
                 user_token = await self.get_user_token(session, customer_id, account_number)
@@ -176,6 +188,7 @@ class ComcastScraper:
         }
         headers.update(self.navigation_headers)
 
+        proxy_url = get_aiohttp_proxy_url()
         async with session.post(
             'https://business-self-service-prod.codebig2.net/business-bootstrap-api/v1/api/state/application/orionInitialState',
             headers=headers,
@@ -183,6 +196,7 @@ class ComcastScraper:
                 "customerId": customer_id,
                 "userContextId": self.navigation_headers.get('tracking-id'),
             },
+            proxy=proxy_url
         ) as response:
             if response.status != 200:
                 raise Exception(f"Failed to get user token. Status: {response.status}")
@@ -213,6 +227,7 @@ class ComcastScraper:
         }
         headers.update(self.navigation_headers)
 
+        proxy_url = get_aiohttp_proxy_url()
         async with session.post(
             'https://business-self-service-prod.codebig2.net/billing-api/v1/bill/getDetails',
             headers=headers,
@@ -221,6 +236,7 @@ class ComcastScraper:
                 "isEnterprise": False,
                 "isOrionCustomer": False
             },
+            proxy=proxy_url
         ) as response:
             if response.status != 200:
                 raise Exception(f"Failed to get billing details. Status: {response.status}")
@@ -251,6 +267,7 @@ class ComcastScraper:
         }
         headers.update(self.navigation_headers)
 
+        proxy_url = get_aiohttp_proxy_url()
         async with session.post(
             'https://business-self-service-prod.codebig2.net/billing-api/v1/bill/download',
             headers=headers,
@@ -260,6 +277,7 @@ class ComcastScraper:
                 "isEnterprise": False,
                 "isOrionCustomer": False
             },
+            proxy=proxy_url
         ) as download_response:
             if download_response.status != 200:
                 raise Exception(f"Failed to download bill. Status: {download_response.status}")

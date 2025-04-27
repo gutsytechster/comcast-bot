@@ -1,14 +1,61 @@
 import asyncio
 import logging
-from typing import Callable, TypeVar, Any, Union, Optional
+from typing import Callable, TypeVar, Any, Union, Optional, Dict
 from functools import wraps
 import aiohttp
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
 ResponseType = Union[T, aiohttp.ClientResponse]
+
+def get_proxy_config() -> Optional[Dict[str, str]]:
+    """Get proxy configuration from environment variables.
+
+    Returns:
+        Optional[Dict[str, str]]: Proxy configuration for Playwright and aiohttp.
+        Format: {
+            'server': 'http://proxy:port',
+            'username': 'proxy_username',  # Optional
+            'password': 'proxy_password'   # Optional
+        }
+    """
+    proxy_server = os.getenv('PROXY_SERVER')
+    if not proxy_server:
+        return None
+
+    config = {'server': proxy_server}
+
+    # Add authentication if provided
+    proxy_username = os.getenv('PROXY_USERNAME')
+    proxy_password = os.getenv('PROXY_PASSWORD')
+    if proxy_username and proxy_password:
+        config.update({
+            'username': proxy_username,
+            'password': proxy_password
+        })
+
+    return config
+
+def get_aiohttp_proxy_url() -> Optional[str]:
+    """Get proxy URL for aiohttp client.
+
+    Returns:
+        Optional[str]: Proxy URL in format http://username:password@host:port
+    """
+    config = get_proxy_config()
+    if not config:
+        return None
+
+    if 'username' in config and 'password' in config:
+        return f"http://{config['username']}:{config['password']}@{config['server'].replace('http://', '')}"
+    return config['server']
 
 def with_retry(max_retries: int = 3, delay: float = 1.0):
     """Decorator to retry async functions on failure.
