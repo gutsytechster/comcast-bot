@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 import aiohttp
 from playwright.async_api import async_playwright, Page, Browser, Response
 from dotenv import load_dotenv
+from utils import with_retry
 
 # Load environment variables
 load_dotenv()
@@ -157,94 +158,78 @@ class ComcastScraper:
         except Exception as e:
             logger.error(f"Error processing account {account_number}: {str(e)}")
 
+    @with_retry(max_retries=3)
     async def get_user_token(self, session: aiohttp.ClientSession, customer_id: str, account_number: str) -> Optional[str]:
         """Get user token for API requests."""
         if not self.navigation_headers:
             logger.error("No navigation headers available while getting user token")
             return None
 
-        try:
-            headers = {
-                'Content-Type': 'application/json',
-                'Origin': 'https://business.comcast.com',
-                'Referer': 'https://business.comcast.com/account/bill',
-                'Sec-Fetch-Dest': 'empty',
-                'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'cross-site',
-                'Cb-Authorization': '',
-            }
-            headers.update(self.navigation_headers)
+        headers = {
+            'Content-Type': 'application/json',
+            'Origin': 'https://business.comcast.com',
+            'Referer': 'https://business.comcast.com/account/bill',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'cross-site',
+            'Cb-Authorization': '',
+        }
+        headers.update(self.navigation_headers)
 
-            async with session.post(
-                'https://business-self-service-prod.codebig2.net/business-bootstrap-api/v1/api/state/application/orionInitialState',
-                headers=headers,
-                json={
-                    "customerId": customer_id,
-                    "userContextId": self.navigation_headers.get('tracking-id'),
-                },
-            ) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to get user token. Status: {response.status}")
-                    return None
+        async with session.post(
+            'https://business-self-service-prod.codebig2.net/business-bootstrap-api/v1/api/state/application/orionInitialState',
+            headers=headers,
+            json={
+                "customerId": customer_id,
+                "userContextId": self.navigation_headers.get('tracking-id'),
+            },
+        ) as response:
+            if response.status != 200:
+                raise Exception(f"Failed to get user token. Status: {response.status}")
 
-                authorization_response = await response.json()
-                user_token = authorization_response.get('initialStateModel', {}).get('userToken')
-                if not user_token:
-                    logger.error("No user token found in response")
-                    return None
+            authorization_response = await response.json()
+            user_token = authorization_response.get('initialStateModel', {}).get('userToken')
+            if not user_token:
+                raise Exception("No user token found in response")
 
-                logger.info(f"User token for account {account_number}: {user_token}")
-                return user_token
-        except Exception as e:
-            logger.error(f"Error getting user token: {str(e)}")
-            return None
+            logger.info(f"User token for account {account_number}: {user_token}")
+            return user_token
 
+    @with_retry(max_retries=3)
     async def get_billing_details(self, session: aiohttp.ClientSession, account_number: str, user_token: str) -> Optional[Dict]:
         """Get billing details with retries."""
         if not self.navigation_headers:
             logger.error("No navigation headers available while getting billing details")
             return None
 
-        for attempt in range(3):
-            try:
-                headers = {
-                    'Content-Type': 'application/json',
-                    'Origin': 'https://business.comcast.com',
-                    'Referer': 'https://business.comcast.com/account/bill',
-                    'Sec-Fetch-Dest': 'empty',
-                    'Sec-Fetch-Mode': 'cors',
-                    'Sec-Fetch-Site': 'cross-site',
-                    'Cb-Authorization': user_token,
-                }
-                headers.update(self.navigation_headers)
+        headers = {
+            'Content-Type': 'application/json',
+            'Origin': 'https://business.comcast.com',
+            'Referer': 'https://business.comcast.com/account/bill',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'cross-site',
+            'Cb-Authorization': user_token,
+        }
+        headers.update(self.navigation_headers)
 
-                async with session.post(
-                    'https://business-self-service-prod.codebig2.net/billing-api/v1/bill/getDetails',
-                    headers=headers,
-                    json={
-                        "billingArrangementId": account_number,
-                        "isEnterprise": False,
-                        "isOrionCustomer": False
-                    },
-                ) as response:
-                    if response.status != 200:
-                        logger.warning(f"Failed to get billing details. Status: {response.status}. Attempt {attempt + 1}/3")
-                        if attempt < 2:
-                            await asyncio.sleep(1)
-                            continue
-                        return None
+        async with session.post(
+            'https://business-self-service-prod.codebig2.net/billing-api/v1/bill/getDetails',
+            headers=headers,
+            json={
+                "billingArrangementId": account_number,
+                "isEnterprise": False,
+                "isOrionCustomer": False
+            },
+        ) as response:
+            if response.status != 200:
+                raise Exception(f"Failed to get billing details. Status: {response.status}")
 
-                    billing_response = await response.json()
-                    logger.debug(f"Billing API Response for account {account_number}: {billing_response}")
+            billing_response = await response.json()
+            logger.debug(f"Billing API Response for account {account_number}: {billing_response}")
+            return billing_response
 
-                    return billing_response
-            except Exception as e:
-                logger.error(f"Error getting billing details: {str(e)}")
-                if attempt < 2:
-                    await asyncio.sleep(1)
-                    continue
-                return None
-
+    @with_retry(max_retries=3)
     async def download_bill(self, session: aiohttp.ClientSession, account_number: str, billing_response: Dict, user_token: str):
         """Download bill PDF."""
         if not self.navigation_headers:
@@ -253,42 +238,37 @@ class ComcastScraper:
 
         bill_id = billing_response.get('summary', {}).get('billId')
         if not bill_id:
-            logger.error(f"No billId found in response for account {account_number}")
-            return
+            raise Exception(f"No billId found in response for account {account_number}")
 
-        try:
-            headers = {
-                'Content-Type': 'application/json',
-                'Origin': 'https://business.comcast.com',
-                'Referer': 'https://business.comcast.com/',
-                'Sec-Fetch-Dest': 'empty',
-                'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'cross-site',
-                'Cb-Authorization': user_token,
-            }
-            headers.update(self.navigation_headers)
+        headers = {
+            'Content-Type': 'application/json',
+            'Origin': 'https://business.comcast.com',
+            'Referer': 'https://business.comcast.com/',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'cross-site',
+            'Cb-Authorization': user_token,
+        }
+        headers.update(self.navigation_headers)
 
-            async with session.post(
-                'https://business-self-service-prod.codebig2.net/billing-api/v1/bill/download',
-                headers=headers,
-                json={
-                    "billingArrangementId": account_number,
-                    "billId": bill_id,
-                    "isEnterprise": False,
-                    "isOrionCustomer": False
-                },
-            ) as download_response:
-                if download_response.status != 200:
-                    logger.error(f"Failed to download bill. Status: {download_response.status}")
-                    return
+        async with session.post(
+            'https://business-self-service-prod.codebig2.net/billing-api/v1/bill/download',
+            headers=headers,
+            json={
+                "billingArrangementId": account_number,
+                "billId": bill_id,
+                "isEnterprise": False,
+                "isOrionCustomer": False
+            },
+        ) as download_response:
+            if download_response.status != 200:
+                raise Exception(f"Failed to download bill. Status: {download_response.status}")
 
-                pdf_content = await download_response.read()
-                pdf_filename = f"bill_{account_number}_{bill_id}.pdf"
-                with open(f"bills/{pdf_filename}", "wb") as f:
-                    f.write(pdf_content)
-                logger.info(f"Saved bill PDF to {pdf_filename}")
-        except Exception as e:
-            logger.error(f"Error downloading bill: {str(e)}")
+            pdf_content = await download_response.read()
+            pdf_filename = f"bill_{account_number}_{bill_id}.pdf"
+            with open(f"bills/{pdf_filename}", "wb") as f:
+                f.write(pdf_content)
+            logger.info(f"Saved bill PDF to {pdf_filename}")
 
     async def run(self):
         """Main execution flow."""
