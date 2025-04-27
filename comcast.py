@@ -108,8 +108,13 @@ class ComcastScraper:
 
         try:
             await self.page.goto("https://business.comcast.com/account")
-            await self.page.click("#onetrust-reject-all-handler")
-            await self.page.wait_for_timeout(2000)
+            try:
+                reject_button = await self.page.wait_for_selector("#onetrust-reject-all-handler", timeout=2000)
+                if reject_button:
+                    await reject_button.click()
+            except Exception:
+                # Cookie consent banner not present, continue
+                pass
 
             # Fill username and click sign in
             await self.page.fill("input[name='user']", username)
