@@ -72,7 +72,7 @@ class ComcastScraper:
                 "post_data": await request.post_data() if request.method == "POST" else None,
             }
             self.intercepted_requests.append(request_data)
-            logger.info(f"Intercepted Navigation Request headers: {request_data.get('headers')}")
+            logger.debug(f"Intercepted Navigation Request headers: {request_data.get('headers')}")
             self.navigation_headers = request.headers
             self.cookies = {cookie['name']: cookie['value'] for cookie in request_data['cookies']}
 
@@ -81,7 +81,6 @@ class ComcastScraper:
         if response.url.endswith('/Navigation'):
             try:
                 response_text = await response.text()
-                logger.info(f"Navigation Response: {response_text}")
                 if self.navigation_response_future and not self.navigation_response_future.done():
                     self.navigation_response_future.set_result(response_text)
                     self.initial_navigation_response = response_text
@@ -138,7 +137,7 @@ class ComcastScraper:
             logger.info(f"Successfully navigated to account {account_number}")
 
             if not self.navigation_headers:
-                logger.error("No navigation headers available")
+                logger.error("No navigation headers available while processing account")
                 return
 
             async with aiohttp.ClientSession() as session:
@@ -161,7 +160,7 @@ class ComcastScraper:
     async def get_user_token(self, session: aiohttp.ClientSession, customer_id: str, account_number: str) -> Optional[str]:
         """Get user token for API requests."""
         if not self.navigation_headers:
-            logger.error("No navigation headers available")
+            logger.error("No navigation headers available while getting user token")
             return None
 
         try:
@@ -203,7 +202,7 @@ class ComcastScraper:
     async def get_billing_details(self, session: aiohttp.ClientSession, account_number: str, user_token: str) -> Optional[Dict]:
         """Get billing details with retries."""
         if not self.navigation_headers:
-            logger.error("No navigation headers available")
+            logger.error("No navigation headers available while getting billing details")
             return None
 
         for attempt in range(3):
@@ -236,7 +235,7 @@ class ComcastScraper:
                         return None
 
                     billing_response = await response.json()
-                    logger.info(f"Billing API Response for account {account_number}: {billing_response}")
+                    logger.debug(f"Billing API Response for account {account_number}: {billing_response}")
 
                     return billing_response
             except Exception as e:
@@ -249,7 +248,7 @@ class ComcastScraper:
     async def download_bill(self, session: aiohttp.ClientSession, account_number: str, billing_response: Dict, user_token: str):
         """Download bill PDF."""
         if not self.navigation_headers:
-            logger.error("No navigation headers available")
+            logger.error("No navigation headers available while downloading bill")
             return
 
         bill_id = billing_response.get('summary', {}).get('billId')
